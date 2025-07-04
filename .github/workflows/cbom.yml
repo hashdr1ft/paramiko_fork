@@ -16,10 +16,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build with Maven
-        run: mvn clean package -DskipTests=true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build with Maven (if Java)
+        run: |
+          if [ -f pom.xml ]; then
+            echo "pom.xml found: running mvn clean package"
+            mvn clean package -DskipTests=true
+          else
+            echo "No pom.xml – skipping Maven build."
+          fi
 
       - name: Create CBOM
         uses: PQCA/cbomkit-action@v2.1.0
@@ -64,10 +68,9 @@ jobs:
           python3 - << 'EOF'
           import json, os, glob, requests
 
-          # Load all CBOM JSON files from the artifact
           files = glob.glob("*.json")
           if not files:
-              print("No CBOM files found.")
+              print("No CBOM JSON found, exiting.")
               exit(1)
 
           url = os.environ['ELASTIC_URL']
@@ -78,8 +81,7 @@ jobs:
               with open(fname) as f:
                   cbom = json.load(f)
 
-              assets = cbom.get('cryptographic_assets', [])
-              for asset in assets:
+              for asset in cbom.get('cryptographic_assets', []):
                   doc = {
                       'repo': repo,
                       'file': asset.get('location'),
