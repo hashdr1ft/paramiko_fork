@@ -1,29 +1,11 @@
-name: CBOMKit Scan and Push to Wazuh
-
-on:
-  workflow_dispatch:         # Manual run
-  schedule:
-    - cron: "0 1 * * *"       # Daily at 1 AM UTC
-
-jobs:
-  scan_and_push:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: Run CBOMKit and generate report
-        run: |
-          docker run --rm -v ${{ github.workspace }}:/repo ghcr.io/ibm/cbomkit:latest /repo > cbom_raw.json
-
-      - name: Format & Push to Elasticsearch
-        env:
-          ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
-          ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
-          ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
-        run: |
-          pip install requests
-          python3 <<EOF
+- name: Format & Push to Elasticsearch
+  env:
+    ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
+    ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
+    ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
+  run: |
+    pip install requests
+    cat <<'EOF' > cbom_push.py
 import json, requests, os
 
 with open("cbom_raw.json") as f:
@@ -35,14 +17,15 @@ auth = (os.environ["ELASTIC_USER"], os.environ["ELASTIC_PASS"])
 
 for item in assets:
     doc = {
-        "repo": "${{ github.repository }}",
+        "repo": os.environ.get("GITHUB_REPOSITORY"),
         "file": item.get("location"),
         "algorithm": item.get("algorithm"),
         "library": item.get("library"),
         "pq_safe": item.get("pq_safe", False),
         "risk_level": item.get("risk_level", "unknown"),
-        "timestamp": "${{ github.event.repository.updated_at }}"
+        "timestamp": os.environ.get("GITHUB_EVENT_TIME", "")
     }
     res = requests.post(f"{url}/cbomkit-reports/_doc", json=doc, auth=auth)
     print(res.status_code, res.text)
 EOF
+    python3 cbom_push.py
