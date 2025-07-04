@@ -10,30 +10,63 @@ permissions:
 jobs:
   cbom-scan:
     runs-on: ubuntu-latest
-    name: CBOM generation
+    name: Generate CBOM
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build with Maven (if Java)
+      - name: Detect Java project
+        id: detect
         run: |
-          if [ -f pom.xml ]; then
-            echo "pom.xml found: running mvn clean package"
-            mvn clean package -DskipTests=true
-          else
-            echo "No pom.xml – skipping Maven build."
-          fi
+          echo "is_java=$(if [ -f pom.xml ]; then echo true; else echo false; fi)" \
+            >> $GITHUB_OUTPUT
 
-      - name: Create CBOM
+      # ───────────────────────────────────────────
+      # Java path: build & PQCA action
+      - name: Build with Maven
+        if: steps.detect.outputs.is_java == 'true'
+        run: mvn clean package -DskipTests=true
+
+      - name: Create CBOM (Java)
+        if: steps.detect.outputs.is_java == 'true'
         uses: PQCA/cbomkit-action@v2.1.0
-        id: cbom
+        id: cbom_java
 
+      # ───────────────────────────────────────────
+      # Non-Java path: CBOMKit CLI
+      - name: Log in to GHCR
+        if: steps.detect.outputs.is_java != 'true'
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull CBOMKit CLI image
+        if: steps.detect.outputs.is_java != 'true'
+        run: docker pull ghcr.io/ibm/cbomkit/cli:latest
+
+      - name: Run CBOMKit CLI → JSON
+        if: steps.detect.outputs.is_java != 'true'
+        run: |
+          mkdir -p cbom
+          docker run --rm \
+            -v "${{ github.workspace }}:/src" \
+            ghcr.io/ibm/cbomkit/cli:latest \
+            /src --format json \
+            > cbom/cbom_raw.json
+        id: cbom_cli
+
+      # ───────────────────────────────────────────
+      # Upload whatever CBOM files we got
       - name: Upload CBOM artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cbom-report
-          path: ${{ steps.cbom.outputs.pattern }}
+          name: cbom-json
+          path: |
+            ${{ steps.cbom_java.outputs.pattern }}
+            cbom/**/*.json
           if-no-files-found: warn
 
   push-cbom:
@@ -45,20 +78,20 @@ jobs:
       contents: read
 
     steps:
-      - name: Download CBOM artifact
+      - name: Download CBOM JSON files
         uses: actions/download-artifact@v4
         with:
-          name: cbom-report
+          name: cbom-json
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
 
-      - name: Install Python dependencies
+      - name: Install Python requests
         run: pip install requests
 
-      - name: Push CBOM to Elasticsearch
+      - name: Push to Elasticsearch
         env:
           ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
           ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
@@ -66,11 +99,11 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           python3 - << 'EOF'
-          import json, os, glob, requests
+          import glob, json, os, requests
 
           files = glob.glob("*.json")
           if not files:
-              print("No CBOM JSON found, exiting.")
+              print("🔍 No CBOM JSON found. Exiting.")
               exit(1)
 
           url = os.environ['ELASTIC_URL']
@@ -80,7 +113,6 @@ jobs:
           for fname in files:
               with open(fname) as f:
                   cbom = json.load(f)
-
               for asset in cbom.get('cryptographic_assets', []):
                   doc = {
                       'repo': repo,
@@ -93,5 +125,5 @@ jobs:
                       'generated_at': cbom.get('bomTimestamp', '')
                   }
                   res = requests.post(f'{url}/cbomkit-reports/_doc', json=doc, auth=auth)
-                  print(fname, res.status_code, res.text)
+                  print(fname, res.status_code)
           EOF
