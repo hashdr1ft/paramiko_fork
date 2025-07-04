@@ -1,18 +1,19 @@
 name: CBOMKit Scan and Push to Wazuh
 
 on:
-  workflow_dispatch:         # Manual run
+  workflow_dispatch:
   schedule:
-    - cron: "0 1 * * *"       # Daily at 1 AM UTC
+    - cron: "0 1 * * *"
 
 jobs:
   scan_and_push:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Run CBOMKit and generate report
+      - name: Run CBOMKit
         run: |
           docker run --rm -v ${{ github.workspace }}:/repo ghcr.io/ibm/cbomkit:latest /repo > cbom_raw.json
 
@@ -23,25 +24,25 @@ jobs:
           ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
         run: |
           pip install requests
-          python3 <<EOF
+          python3 - <<'EOF'
 import json, requests, os
 
 with open("cbom_raw.json") as f:
     cbom = json.load(f)
 
-assets = cbom.get("cryptographic_assets", [])
 url = os.environ["ELASTIC_URL"]
 auth = (os.environ["ELASTIC_USER"], os.environ["ELASTIC_PASS"])
+assets = cbom.get("cryptographic_assets", [])
 
 for item in assets:
     doc = {
-        "repo": "${{ github.repository }}",
+        "repo": os.environ.get("GITHUB_REPOSITORY"),
         "file": item.get("location"),
         "algorithm": item.get("algorithm"),
         "library": item.get("library"),
         "pq_safe": item.get("pq_safe", False),
         "risk_level": item.get("risk_level", "unknown"),
-        "timestamp": "${{ github.event.repository.updated_at }}"
+        "timestamp": os.environ.get("GITHUB_EVENT_TIME", "")
     }
     res = requests.post(f"{url}/cbomkit-reports/_doc", json=doc, auth=auth)
     print(res.status_code, res.text)
