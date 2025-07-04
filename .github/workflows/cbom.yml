@@ -1,71 +1,56 @@
-name: CBOMKit Scan and Push to Wazuh
+name: CBOMKit Scan & Push to Wazuh
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: "0 3 * * *"  # Daily at 3 AM UTC
 
 jobs:
-  cbom_scan:
+  scan:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v4
+      - name: Run CBOMKit
+        uses: PQCA/cbomkit-action@main
         with:
-          python-version: '3.12'
+          path: .  # scan current repo root
+        id: cbom
 
-      - name: Install Python dependencies
-        run: pip install requests
+      - name: Show CBOMKit Output
+        run: cat ${{ steps.cbom.outputs.output_file }}
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Pull CBOMKit CLI image
-        run: docker pull ghcr.io/ibm/cbomkit/cli:latest
-
-      - name: Run CBOMKit (CLI) and generate JSON report
-        run: |
-          docker run --rm \
-            -v "${{ github.workspace }}:/repo" \
-            ghcr.io/ibm/cbomkit/cli:latest \
-            /repo --format json > cbom_raw.json
-
-      - name: Push CBOM to Elasticsearch
+      - name: Send CBOM Report to Wazuh Elasticsearch
         env:
           ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
           ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
           ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          CBOM_FILE: ${{ steps.cbom.outputs.output_file }}
         run: |
-          python3 - << 'EOF'
-          import json, os, requests
+          pip install requests
+          python3 <<EOF
+import json, requests, os
 
-          with open('cbom_raw.json') as f:
-              cbom = json.load(f)
+with open(os.environ["CBOM_FILE"]) as f:
+    cbom = json.load(f)
 
-          assets = cbom.get('cryptographic_assets', [])
-          url = os.environ['ELASTIC_URL']
-          auth = (os.environ['ELASTIC_USER'], os.environ['ELASTIC_PASS'])
+for asset in cbom.get("cryptographic_assets", []):
+    doc = {
+        "repo": "${{ github.repository }}",
+        "file": asset.get("location"),
+        "algorithm": asset.get("algorithm"),
+        "library": asset.get("library"),
+        "pq_safe": asset.get("pq_safe", False),
+        "risk_level": asset.get("risk_level", "unknown"),
+        "timestamp": "${{ github.event.repository.updated_at }}"
+    }
 
-          for asset in assets:
-              doc = {
-                  'repo': os.environ['GITHUB_REPOSITORY'],
-                  'file': asset.get('location'),
-                  'algorithm': asset.get('algorithm'),
-                  'library': asset.get('library'),
-                  'pq_safe': asset.get('pq_safe', False),
-                  'risk_level': asset.get('risk_level', 'unknown'),
-                  'scanner': cbom.get('scanner', ''),
-                  'generated_at': cbom.get('bomTimestamp', '')
-              }
-              res = requests.post(f'{url}/cbomkit-reports/_doc', json=doc, auth=auth)
-              print(res.status_code, res.text)
-          EOF
+    res = requests.post(
+        os.environ["ELASTIC_URL"] + "/cbomkit-reports/_doc",
+        auth=(os.environ["ELASTIC_USER"], os.environ["ELASTIC_PASS"]),
+        headers={"Content-Type": "application/json"},
+        json=doc
+    )
+    print(res.status_code, res.text)
+EOF
