@@ -5,7 +5,8 @@
     ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
   run: |
     pip install requests
-    cat <<'EOF' > cbom_push.py
+    python3 - <<EOF
+
 import json, requests, os
 
 with open("cbom_raw.json") as f:
@@ -17,15 +18,14 @@ auth = (os.environ["ELASTIC_USER"], os.environ["ELASTIC_PASS"])
 
 for item in assets:
     doc = {
-        "repo": os.environ.get("GITHUB_REPOSITORY"),
+        "repo": "${{ github.repository }}",
         "file": item.get("location"),
         "algorithm": item.get("algorithm"),
         "library": item.get("library"),
         "pq_safe": item.get("pq_safe", False),
         "risk_level": item.get("risk_level", "unknown"),
-        "timestamp": os.environ.get("GITHUB_EVENT_TIME", "")
+        "timestamp": "${{ github.event.repository.updated_at }}"
     }
     res = requests.post(f"{url}/cbomkit-reports/_doc", json=doc, auth=auth)
     print(res.status_code, res.text)
 EOF
-    python3 cbom_push.py
