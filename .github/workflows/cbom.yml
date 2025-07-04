@@ -1,2 +1,12 @@
-- name: CBOMkit-action
-  uses: PQCA/cbomkit-action@v2.1.0
+            - name: CBAE action
+  # You may pin to the exact commit or the version.
+  # uses: Namokar100/cbae-action@08f8642261949bd5178e76c0dbe7f34c8edde942
+  uses: Namokar100/cbae-action@v1.0.8
+  with:
+    # GitHub token with access to clone CBOM tool repo
+    token: 
+    # Optional shell commands to install custom build tools before analysis
+    commands-to-install-build-tools: # optional
+    # Optional build command to compile the project before analysis
+    build-command: # optional
+          
