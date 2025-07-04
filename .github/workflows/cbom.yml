@@ -13,23 +13,18 @@ jobs:
     name: Generate CBOMs
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Create CBOM (all languages)
+      - name: Create CBOM
         uses: PQCA/cbomkit-action@v2.1.0
         id: cbom
-        with:
-          # output format json is default, no build setup needed for any language
-          # you can pass extra scanner settings here if needed
-          # e.g. scan-path: '**/*.py'
-      
+
       - name: Upload CBOM JSONs
         uses: actions/upload-artifact@v4
         with:
           name: cbom-json
           path: ${{ steps.cbom.outputs.pattern }}
-          if-no-files-found: warn
 
   push-cbom:
     needs: cbom-scan
@@ -49,7 +44,7 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
-      
+
       - name: Install requests
         run: pip install requests
 
