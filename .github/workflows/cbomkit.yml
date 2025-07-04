@@ -1,57 +1,54 @@
 name: CBOMKit Scan and Push to Wazuh
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:         # Manual trigger
   schedule:
-    - cron: "0 1 * * *"  # Daily at 1 AM UTC
+    - cron: '0 1 * * *'      # Daily at 1 AM UTC
+
+permissions:
+  contents: read
 
 jobs:
-  scan_and_push:
+  cbom_scan:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Run CBOMKit and generate report
         run: |
           docker run --rm -v ${{ github.workspace }}:/repo ghcr.io/ibm/cbomkit:latest /repo > cbom_raw.json
 
-      - name: Install Python requests
+      - name: Install Python Requests
         run: pip install requests
 
-      - name: Format & Push to Elasticsearch
+      - name: Push CBOM to Elasticsearch
         env:
           ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
           ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
           ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
         run: |
-          echo "Parsing CBOM JSON and pushing to Elasticsearch..."
-          python3 script.py
-
-      - name: Generate Python script
-        run: |
-          cat <<EOF > script.py
-import json
-import os
-import requests
+          python3 - <<EOF
+import json, requests, os
 
 with open("cbom_raw.json") as f:
     cbom = json.load(f)
 
+assets = cbom.get("cryptographic_assets", [])
 url = os.environ["ELASTIC_URL"]
 auth = (os.environ["ELASTIC_USER"], os.environ["ELASTIC_PASS"])
-assets = cbom.get("cryptographic_assets", [])
 
-for item in assets:
+for asset in assets:
     doc = {
         "repo": os.environ.get("GITHUB_REPOSITORY"),
-        "file": item.get("location"),
-        "algorithm": item.get("algorithm"),
-        "library": item.get("library"),
-        "pq_safe": item.get("pq_safe", False),
-        "risk_level": item.get("risk_level", "unknown"),
-        "timestamp": os.environ.get("GITHUB_EVENT_TIME", "")
+        "file": asset.get("location"),
+        "algorithm": asset.get("algorithm"),
+        "library": asset.get("library"),
+        "pq_safe": asset.get("pq_safe", False),
+        "risk_level": asset.get("risk_level", "unknown"),
+        "scanner": cbom.get("scanner", ""),
+        "generated_at": cbom.get("bomTimestamp", "")
     }
     res = requests.post(f"{url}/cbomkit-reports/_doc", json=doc, auth=auth)
     print(res.status_code, res.text)
