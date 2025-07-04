@@ -1,0 +1,5 @@
+            - name: CBOMkit-action
+  # You may pin to the exact commit or the version.
+  # uses: PQCA/cbomkit-action@313e71cd89d91f6e1c44529234ffb5fceb500a17
+  uses: PQCA/cbomkit-action@v2.1.0
+          
