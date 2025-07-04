@@ -1,0 +1,50 @@
+name: CBOMKit Scan and Push to Wazuh
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *"  # Runs daily at 1 AM UTC
+
+jobs:
+  scan_and_push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Run CBOMKit
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/repo ghcr.io/ibm/cbomkit:latest /repo > cbom_raw.json
+
+      - name: Install Python requests
+        run: pip install requests
+
+      - name: Create Python script to parse & send to Elasticsearch
+        run: |
+          echo "import json" > cbom_push.py
+          echo "import os" >> cbom_push.py
+          echo "import requests" >> cbom_push.py
+          echo "with open('cbom_raw.json') as f:" >> cbom_push.py
+          echo "    cbom = json.load(f)" >> cbom_push.py
+          echo "url = os.environ['ELASTIC_URL']" >> cbom_push.py
+          echo "auth = (os.environ['ELASTIC_USER'], os.environ['ELASTIC_PASS'])" >> cbom_push.py
+          echo "for item in cbom.get('cryptographic_assets', []):" >> cbom_push.py
+          echo "    doc = {" >> cbom_push.py
+          echo "        'repo': os.environ.get('GITHUB_REPOSITORY')," >> cbom_push.py
+          echo "        'file': item.get('location')," >> cbom_push.py
+          echo "        'algorithm': item.get('algorithm')," >> cbom_push.py
+          echo "        'library': item.get('library')," >> cbom_push.py
+          echo "        'pq_safe': item.get('pq_safe', False)," >> cbom_push.py
+          echo "        'risk_level': item.get('risk_level', 'unknown')," >> cbom_push.py
+          echo "        'timestamp': os.environ.get('GITHUB_EVENT_TIME', '')" >> cbom_push.py
+          echo "    }" >> cbom_push.py
+          echo "    res = requests.post(f'{url}/cbomkit-reports/_doc', json=doc, auth=auth)" >> cbom_push.py
+          echo "    print(res.status_code, res.text)" >> cbom_push.py
+
+      - name: Run Python script to send CBOM to Wazuh Elasticsearch
+        env:
+          ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
+          ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
+          ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
+        run: python3 cbom_push.py
