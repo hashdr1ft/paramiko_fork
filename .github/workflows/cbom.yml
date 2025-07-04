@@ -19,10 +19,8 @@ jobs:
       - name: Detect Java project
         id: detect
         run: |
-          echo "is_java=$(if [ -f pom.xml ]; then echo true; else echo false; fi)" \
-            >> $GITHUB_OUTPUT
+          echo "is_java=$(if [ -f pom.xml ]; then echo true; else echo false; fi)" >> $GITHUB_OUTPUT
 
-      # ───────────────────────────────────────────
       # Java path: build & PQCA action
       - name: Build with Maven
         if: steps.detect.outputs.is_java == 'true'
@@ -33,7 +31,6 @@ jobs:
         uses: PQCA/cbomkit-action@v2.1.0
         id: cbom_java
 
-      # ───────────────────────────────────────────
       # Non-Java path: CBOMKit CLI
       - name: Log in to GHCR
         if: steps.detect.outputs.is_java != 'true'
@@ -45,7 +42,7 @@ jobs:
 
       - name: Pull CBOMKit CLI image
         if: steps.detect.outputs.is_java != 'true'
-        run: docker pull ghcr.io/ibm/cbomkit/cli:latest
+        run: docker pull ghcr.io/ibm/cbomkit-cli:latest
 
       - name: Run CBOMKit CLI → JSON
         if: steps.detect.outputs.is_java != 'true'
@@ -53,13 +50,11 @@ jobs:
           mkdir -p cbom
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
-            ghcr.io/ibm/cbomkit/cli:latest \
-            /src --format json \
-            > cbom/cbom_raw.json
+            ghcr.io/ibm/cbomkit-cli:latest \
+            /src --format json > cbom/cbom_raw.json
         id: cbom_cli
 
-      # ───────────────────────────────────────────
-      # Upload whatever CBOM files we got
+      # Upload whichever JSON CBOMs were produced
       - name: Upload CBOM artifact
         uses: actions/upload-artifact@v4
         with:
@@ -103,7 +98,7 @@ jobs:
 
           files = glob.glob("*.json")
           if not files:
-              print("🔍 No CBOM JSON found. Exiting.")
+              print("No CBOM JSON found. Exiting.")
               exit(1)
 
           url = os.environ['ELASTIC_URL']
@@ -125,5 +120,5 @@ jobs:
                       'generated_at': cbom.get('bomTimestamp', '')
                   }
                   res = requests.post(f'{url}/cbomkit-reports/_doc', json=doc, auth=auth)
-                  print(fname, res.status_code)
+                  print(fname, res.status_code, res.text)
           EOF
