@@ -10,20 +10,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python 3
         uses: actions/setup-python@v4
         with:
-          python-version: '3.x'
+          python-version: '3.4'
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: pip install requests
 
-      - name: Run CBOMKit and generate report
+      - name: Pull CBOMKit CLI image
+        run: docker pull ghcr.io/ibm/cbomkit/cli:latest
+
+      - name: Run CBOMKit (CLI) and generate JSON report
         run: |
-          docker run --rm -v "${{ github.workspace }}:/repo" ghcr.io/ibm/cbomkit:latest /repo > cbom_raw.json
+          docker run --rm \
+            -v "${{ github.workspace }}:/repo" \
+            ghcr.io/ibm/cbomkit/cli:latest \
+            /repo --format json > cbom_raw.json
 
       - name: Push CBOM to Elasticsearch
         env:
@@ -44,7 +51,7 @@ jobs:
 
           for asset in assets:
               doc = {
-                  'repo': os.environ.get('GITHUB_REPOSITORY'),
+                  'repo': os.environ['GITHUB_REPOSITORY'],
                   'file': asset.get('location'),
                   'algorithm': asset.get('algorithm'),
                   'library': asset.get('library'),
