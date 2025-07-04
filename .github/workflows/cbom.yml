@@ -13,43 +13,46 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run CBOMKit and generate report
-        run: |
-          docker run --rm -v ${{ github.workspace }}:/repo ghcr.io/ibm/cbomkit:latest /repo > cbom_raw.json
+      - name: Set up Python 3
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
 
-      - name: Install Python requests
+      - name: Install dependencies
         run: pip install requests
 
-      - name: Write Python script to push CBOM to Elasticsearch
+      - name: Run CBOMKit and generate report
         run: |
-          echo "import json" > push_cbom_to_es.py
-          echo "import requests" >> push_cbom_to_es.py
-          echo "import os" >> push_cbom_to_es.py
-          echo "" >> push_cbom_to_es.py
-          echo "with open('cbom_raw.json') as f:" >> push_cbom_to_es.py
-          echo "    cbom = json.load(f)" >> push_cbom_to_es.py
-          echo "" >> push_cbom_to_es.py
-          echo "assets = cbom.get('cryptographic_assets', [])" >> push_cbom_to_es.py
-          echo "url = os.environ['ELASTIC_URL']" >> push_cbom_to_es.py
-          echo "auth = (os.environ['ELASTIC_USER'], os.environ['ELASTIC_PASS'])" >> push_cbom_to_es.py
-          echo "" >> push_cbom_to_es.py
-          echo "for asset in assets:" >> push_cbom_to_es.py
-          echo "    doc = {" >> push_cbom_to_es.py
-          echo "        'repo': os.environ.get('GITHUB_REPOSITORY')," >> push_cbom_to_es.py
-          echo "        'file': asset.get('location')," >> push_cbom_to_es.py
-          echo "        'algorithm': asset.get('algorithm')," >> push_cbom_to_es.py
-          echo "        'library': asset.get('library')," >> push_cbom_to_es.py
-          echo "        'pq_safe': asset.get('pq_safe', False)," >> push_cbom_to_es.py
-          echo "        'risk_level': asset.get('risk_level', 'unknown')," >> push_cbom_to_es.py
-          echo "        'scanner': cbom.get('scanner', '')," >> push_cbom_to_es.py
-          echo "        'generated_at': cbom.get('bomTimestamp', '')" >> push_cbom_to_es.py
-          echo "    }" >> push_cbom_to_es.py
-          echo "    res = requests.post(f'{url}/cbomkit-reports/_doc', json=doc, auth=auth)" >> push_cbom_to_es.py
-          echo "    print(res.status_code, res.text)" >> push_cbom_to_es.py
+          docker run --rm -v "${{ github.workspace }}:/repo" ghcr.io/ibm/cbomkit:latest /repo > cbom_raw.json
 
-      - name: Run push script
+      - name: Push CBOM to Elasticsearch
         env:
           ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
           ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
           ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
-        run: python3 push_cbom_to_es.py
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - << 'EOF'
+          import json, os, requests
+
+          with open('cbom_raw.json') as f:
+              cbom = json.load(f)
+
+          assets = cbom.get('cryptographic_assets', [])
+          url = os.environ['ELASTIC_URL']
+          auth = (os.environ['ELASTIC_USER'], os.environ['ELASTIC_PASS'])
+
+          for asset in assets:
+              doc = {
+                  'repo': os.environ.get('GITHUB_REPOSITORY'),
+                  'file': asset.get('location'),
+                  'algorithm': asset.get('algorithm'),
+                  'library': asset.get('library'),
+                  'pq_safe': asset.get('pq_safe', False),
+                  'risk_level': asset.get('risk_level', 'unknown'),
+                  'scanner': cbom.get('scanner', ''),
+                  'generated_at': cbom.get('bomTimestamp', '')
+              }
+              res = requests.post(f'{url}/cbomkit-reports/_doc', json=doc, auth=auth)
+              print(res.status_code, res.text)
+          EOF
