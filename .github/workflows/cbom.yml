@@ -19,9 +19,9 @@ jobs:
       - name: Detect Java project
         id: detect
         run: |
-          echo "is_java=$(if [ -f pom.xml ]; then echo true; else echo false; fi)" >> $GITHUB_OUTPUT
+          echo "is_java=$( [ -f pom.xml ] && echo true || echo false )" >> $GITHUB_OUTPUT
 
-      # Java path: build & PQCA action
+      # ─── Java path: build & PQCA action ───────────────────────────────
       - name: Build with Maven
         if: steps.detect.outputs.is_java == 'true'
         run: mvn clean package -DskipTests=true
@@ -31,30 +31,30 @@ jobs:
         uses: PQCA/cbomkit-action@v2.1.0
         id: cbom_java
 
-      # Non-Java path: CBOMKit CLI
-      - name: Log in to GHCR
+      # ─── Non-Java path: use the CLI JAR from Maven Central ──────────
+      - name: Set up JDK 17 (for CLI)
         if: steps.detect.outputs.is_java != 'true'
-        uses: docker/login-action@v2
+        uses: actions/setup-java@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          distribution: temurin
+          java-version: '17'
 
-      - name: Pull CBOMKit CLI image
-        if: steps.detect.outputs.is_java != 'true'
-        run: docker pull ghcr.io/ibm/cbomkit-cli:latest
-
-      - name: Run CBOMKit CLI → JSON
+      - name: Download CBOMKit-CLI JAR
         if: steps.detect.outputs.is_java != 'true'
         run: |
           mkdir -p cbom
-          docker run --rm \
-            -v "${{ github.workspace }}:/src" \
-            ghcr.io/ibm/cbomkit-cli:latest \
-            /src --format json > cbom/cbom_raw.json
+          curl -sSL \
+            https://repo1.maven.org/maven2/org/pqca/cbomkit-cli/2.1.0/cbomkit-cli-2.1.0.jar \
+            -o cbomkit-cli.jar
+
+      - name: Run CBOMKit-CLI → JSON
+        if: steps.detect.outputs.is_java != 'true'
+        run: |
+          java -jar cbomkit-cli.jar /github/workspace --format json \
+            > cbom/cbom_raw.json
         id: cbom_cli
 
-      # Upload whichever JSON CBOMs were produced
+      # ─── Upload whichever JSON CBOMs were produced ────────────────────
       - name: Upload CBOM artifact
         uses: actions/upload-artifact@v4
         with:
@@ -83,7 +83,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Python requests
+      - name: Install Python dependencies
         run: pip install requests
 
       - name: Push to Elasticsearch
@@ -119,6 +119,7 @@ jobs:
                       'scanner': cbom.get('scanner', ''),
                       'generated_at': cbom.get('bomTimestamp', '')
                   }
-                  res = requests.post(f'{url}/cbomkit-reports/_doc', json=doc, auth=auth)
+                  res = requests.post(f'{url}/cbomkit-reports/_doc',
+                                      json=doc, auth=auth)
                   print(fname, res.status_code, res.text)
           EOF
