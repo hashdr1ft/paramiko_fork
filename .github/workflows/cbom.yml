@@ -1,73 +1,64 @@
 name: CBOMKit Scan and Push to Wazuh
 
 on:
-  workflow_dispatch:       # Manual trigger
+  workflow_dispatch:           # manual trigger
   schedule:
-    - cron: '0 1 * * *'     # Daily at 1 AM UTC
+    - cron: '0 1 * * *'        # daily at 01:00 UTC
+
+permissions:
+  contents: read
+  id-token: write             # if needed for auth
 
 jobs:
-  scan_and_push:
+  cbom_scan:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Pull and run CBOMKit
-        run: |
-          docker pull ghcr.io/ibm/cbomkit:latest
-          docker run --rm \
-            -v "${{ github.workspace }}:/repo" \
-            ghcr.io/ibm/cbomkit:latest /repo > cbom_raw.json
-
-      - name: Setup Python 3
-        uses: actions/setup-python@v4
+      - name: Generate CBOM JSON
+        id: scan
+        uses: PQCA/cbomkit-action@v2.1.0
         with:
-          python-version: '3.x'
+          # For Java: ensures Maven is built; for Python, skip
+          args: |
+            # optionally customize flags here
+        # CBOM output path is in ${{ steps.scan.outputs.pattern }}
 
-      - name: Install dependencies
-        run: pip install requests
+      - name: Upload CBOM manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: cbom
+          path: ${{ steps.scan.outputs.pattern }}
 
-      - name: Push assets to Elasticsearch
+      - name: Push CBOM assets to Elasticsearch
         env:
           ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
           ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
           ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
-          REPO: ${{ github.repository }}
         run: |
-          python3 - <<'PYCODE'
-import os, json, requests
-from datetime import datetime, timezone
-
-# Load the CBOMKit output
-with open("cbom_raw.json") as f:
-    cbom = json.load(f)
-
-assets = cbom.get("cryptographic_assets", [])
-if not assets:
-    print("No cryptographic assets found.")
-    exit(0)
-
-# Prepare Elasticsearch client
-url = os.environ["ELASTIC_URL"].rstrip('/')
-auth = (os.environ["ELASTIC_USER"], os.environ["ELASTIC_PASS"])
-
-# Use current UTC time as timestamp
-timestamp = datetime.now(timezone.utc).isoformat()
-
-# Index each asset
-for item in assets:
+          pip install requests
+          for file in $(find . -name '*.json' -path "${{ steps.scan.outputs.pattern }}" ); do
+            python3 - <<EOF
+import json, requests, os
+cbom = json.load(open(r"$file"))
+for asset in cbom.get("cryptographic_assets", []):
     doc = {
-        "repo": os.environ["REPO"],
-        "file": item.get("location"),
-        "algorithm": item.get("algorithm"),
-        "library": item.get("library"),
-        "pq_safe": item.get("pq_safe", False),
-        "risk_level": item.get("risk_level", "unknown"),
-        "timestamp": timestamp
+        "repo": os.environ["GITHUB_REPOSITORY"],
+        "file": asset.get("location"),
+        "algorithm": asset.get("algorithm"),
+        "library": asset.get("library"),
+        "pq_safe": asset.get("pq_safe", False),
+        "risk_level": asset.get("risk_level", "unknown"),
+        "scanner": cbom.get("scanner", ""),
+        "generated_at": cbom.get("bomTimestamp", "")
     }
-    resp = requests.post(f"{url}/cbomkit-reports/_doc", json=doc, auth=auth)
+    resp = requests.post(
+        f"{os.environ['ELASTIC_URL']}/cbomkit-reports/_doc",
+        json=doc,
+        auth=(os.environ['ELASTIC_USER'], os.environ['ELASTIC_PASS'])
+    )
     print(resp.status_code, resp.text)
-    if not resp.ok:
-        print("Failed to index document:", doc)
-PYCODE
+EOF
+          done
