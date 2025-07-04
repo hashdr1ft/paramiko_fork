@@ -10,52 +10,31 @@ permissions:
 jobs:
   cbom-scan:
     runs-on: ubuntu-latest
-    name: Generate CBOMs
+    name: Generate CBOM
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Detect Java project
-        id: detect
-        run: |
-          echo "is_java=$( [ -f pom.xml ] && echo true || echo false )" \
-            >> $GITHUB_OUTPUT
+      - name: Prepare output dir
+        run: mkdir -p cbom
 
-      # ─ Java projects use the PQCA action ───────────────────────────────
-      - name: Build with Maven
-        if: steps.detect.outputs.is_java == 'true'
-        run: mvn clean package -DskipTests=true
-
-      - name: Create CBOM (Java)
-        if: steps.detect.outputs.is_java == 'true'
-        uses: PQCA/cbomkit-action@v2.1.0
-        id: cbom_java
-
-      # ─ Non-Java projects use the base CBOMKit image as CLI ────────────
       - name: Pull CBOMKit image
-        if: steps.detect.outputs.is_java != 'true'
         run: docker pull ghcr.io/ibm/cbomkit:latest
 
-      - name: Run CBOMKit → JSON
-        if: steps.detect.outputs.is_java != 'true'
+      - name: Run CBOMKit CLI → JSON
         run: |
-          mkdir -p cbom
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
             ghcr.io/ibm/cbomkit:latest \
-            /src --format json > cbom/cbom_raw.json
-        id: cbom_cli
+            java -jar /deployments/cbomkit-cli.jar /src --format json \
+            > cbom/cbom_raw.json
 
-      # ─ Upload whatever JSON BOMs we got ───────────────────────────────
-      - name: Upload CBOM JSONs
+      - name: Upload CBOM JSON
         uses: actions/upload-artifact@v4
         with:
           name: cbom-json
-          path: |
-            ${{ steps.cbom_java.outputs.pattern }}
-            cbom/**/*.json
-          if-no-files-found: warn
+          path: cbom/cbom_raw.json
 
   push-cbom:
     needs: cbom-scan
@@ -66,7 +45,7 @@ jobs:
       contents: read
 
     steps:
-      - name: Download CBOM JSONs
+      - name: Download CBOM JSON
         uses: actions/download-artifact@v4
         with:
           name: cbom-json
@@ -87,26 +66,24 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           python3 - << 'EOF'
-          import glob, json, os, requests
+          import json, os, requests
 
-          url = os.environ['ELASTIC_URL']
+          data = json.load(open('cbom_raw.json'))
+          url  = os.environ['ELASTIC_URL']
           auth = (os.environ['ELASTIC_USER'], os.environ['ELASTIC_PASS'])
           repo = os.environ['GITHUB_REPOSITORY']
 
-          # find every JSON CBOM
-          for fname in glob.glob("*.json"):
-              cbom = json.load(open(fname))
-              for asset in cbom.get('cryptographic_assets', []):
-                  doc = {
-                      'repo': repo,
-                      'file': asset.get('location'),
-                      'algorithm': asset.get('algorithm'),
-                      'library': asset.get('library'),
-                      'pq_safe': asset.get('pq_safe', False),
-                      'risk_level': asset.get('risk_level', 'unknown'),
-                      'scanner': cbom.get('scanner', ''),
-                      'generated_at': cbom.get('bomTimestamp', '')
-                  }
-                  res = requests.post(f"{url}/cbomkit-reports/_doc", json=doc, auth=auth)
-                  print(f"{fname}: {res.status_code}")
+          for asset in data.get('cryptographic_assets', []):
+              doc = {
+                  'repo': repo,
+                  'file': asset.get('location'),
+                  'algorithm': asset.get('algorithm'),
+                  'library': asset.get('library'),
+                  'pq_safe': asset.get('pq_safe', False),
+                  'risk_level': asset.get('risk_level', 'unknown'),
+                  'scanner': data.get('scanner',''),
+                  'generated_at': data.get('bomTimestamp','')
+              }
+              r = requests.post(f'{url}/cbomkit-reports/_doc', json=doc, auth=auth)
+              print(r.status_code, r.text)
           EOF
