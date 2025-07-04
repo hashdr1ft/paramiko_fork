@@ -10,28 +10,52 @@ permissions:
 jobs:
   cbom-scan:
     runs-on: ubuntu-latest
-    name: Generate CBOM
+    name: Generate CBOMs
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Detect Java project
+        id: detect
+        run: |
+          echo "is_java=$( [ -f pom.xml ] && echo true || echo false )" \
+            >> $GITHUB_OUTPUT
+
+      # ─ Java projects use the PQCA action ───────────────────────────────
+      - name: Build with Maven
+        if: steps.detect.outputs.is_java == 'true'
+        run: mvn clean package -DskipTests=true
+
+      - name: Create CBOM (Java)
+        if: steps.detect.outputs.is_java == 'true'
+        uses: PQCA/cbomkit-action@v2.1.0
+        id: cbom_java
+
+      # ─ Non-Java projects use the base CBOMKit image as CLI ────────────
       - name: Pull CBOMKit image
+        if: steps.detect.outputs.is_java != 'true'
         run: docker pull ghcr.io/ibm/cbomkit:latest
 
       - name: Run CBOMKit → JSON
+        if: steps.detect.outputs.is_java != 'true'
         run: |
           mkdir -p cbom
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
             ghcr.io/ibm/cbomkit:latest \
             /src --format json > cbom/cbom_raw.json
+        id: cbom_cli
 
-      - name: Upload CBOM JSON
+      # ─ Upload whatever JSON BOMs we got ───────────────────────────────
+      - name: Upload CBOM JSONs
         uses: actions/upload-artifact@v4
         with:
           name: cbom-json
-          path: cbom/cbom_raw.json
+          path: |
+            ${{ steps.cbom_java.outputs.pattern }}
+            cbom/**/*.json
+          if-no-files-found: warn
 
   push-cbom:
     needs: cbom-scan
@@ -42,12 +66,12 @@ jobs:
       contents: read
 
     steps:
-      - name: Download CBOM JSON
+      - name: Download CBOM JSONs
         uses: actions/download-artifact@v4
         with:
           name: cbom-json
 
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
@@ -63,26 +87,26 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           python3 - << 'EOF'
-          import json, os, requests
-
-          with open('cbom_raw.json') as f:
-              cbom = json.load(f)
+          import glob, json, os, requests
 
           url = os.environ['ELASTIC_URL']
           auth = (os.environ['ELASTIC_USER'], os.environ['ELASTIC_PASS'])
           repo = os.environ['GITHUB_REPOSITORY']
 
-          for asset in cbom.get('cryptographic_assets', []):
-              doc = {
-                  'repo': repo,
-                  'file': asset.get('location'),
-                  'algorithm': asset.get('algorithm'),
-                  'library': asset.get('library'),
-                  'pq_safe': asset.get('pq_safe', False),
-                  'risk_level': asset.get('risk_level', 'unknown'),
-                  'scanner': cbom.get('scanner', ''),
-                  'generated_at': cbom.get('bomTimestamp', '')
-              }
-              res = requests.post(f'{url}/cbomkit-reports/_doc', json=doc, auth=auth)
-              print(res.status_code, res.text)
+          # find every JSON CBOM
+          for fname in glob.glob("*.json"):
+              cbom = json.load(open(fname))
+              for asset in cbom.get('cryptographic_assets', []):
+                  doc = {
+                      'repo': repo,
+                      'file': asset.get('location'),
+                      'algorithm': asset.get('algorithm'),
+                      'library': asset.get('library'),
+                      'pq_safe': asset.get('pq_safe', False),
+                      'risk_level': asset.get('risk_level', 'unknown'),
+                      'scanner': cbom.get('scanner', ''),
+                      'generated_at': cbom.get('bomTimestamp', '')
+                  }
+                  res = requests.post(f"{url}/cbomkit-reports/_doc", json=doc, auth=auth)
+                  print(f"{fname}: {res.status_code}")
           EOF
