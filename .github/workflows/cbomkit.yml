@@ -20,7 +20,7 @@ jobs:
         run: |
           docker run --rm -v ${{ github.workspace }}:/repo ghcr.io/ibm/cbomkit:latest /repo > cbom_raw.json
 
-      - name: Install Python Requests
+      - name: Install Python requests
         run: pip install requests
 
       - name: Push CBOM to Elasticsearch
@@ -29,27 +29,23 @@ jobs:
           ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
           ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
         run: |
-          python3 - <<EOF
-import json, requests, os
-
-with open("cbom_raw.json") as f:
-    cbom = json.load(f)
-
-assets = cbom.get("cryptographic_assets", [])
-url = os.environ["ELASTIC_URL"]
-auth = (os.environ["ELASTIC_USER"], os.environ["ELASTIC_PASS"])
-
-for asset in assets:
-    doc = {
-        "repo": os.environ.get("GITHUB_REPOSITORY"),
-        "file": asset.get("location"),
-        "algorithm": asset.get("algorithm"),
-        "library": asset.get("library"),
-        "pq_safe": asset.get("pq_safe", False),
-        "risk_level": asset.get("risk_level", "unknown"),
-        "scanner": cbom.get("scanner", ""),
-        "generated_at": cbom.get("bomTimestamp", "")
-    }
-    res = requests.post(f"{url}/cbomkit-reports/_doc", json=doc, auth=auth)
-    print(res.status_code, res.text)
-EOF
+          echo "import json, requests, os" > send_to_es.py
+          echo "with open('cbom_raw.json') as f:" >> send_to_es.py
+          echo "    cbom = json.load(f)" >> send_to_es.py
+          echo "assets = cbom.get('cryptographic_assets', [])" >> send_to_es.py
+          echo "url = os.environ['ELASTIC_URL']" >> send_to_es.py
+          echo "auth = (os.environ['ELASTIC_USER'], os.environ['ELASTIC_PASS'])" >> send_to_es.py
+          echo "for asset in assets:" >> send_to_es.py
+          echo "    doc = {" >> send_to_es.py
+          echo "        'repo': os.environ.get('GITHUB_REPOSITORY')," >> send_to_es.py
+          echo "        'file': asset.get('location')," >> send_to_es.py
+          echo "        'algorithm': asset.get('algorithm')," >> send_to_es.py
+          echo "        'library': asset.get('library')," >> send_to_es.py
+          echo "        'pq_safe': asset.get('pq_safe', False)," >> send_to_es.py
+          echo "        'risk_level': asset.get('risk_level', 'unknown')," >> send_to_es.py
+          echo "        'scanner': cbom.get('scanner', '')," >> send_to_es.py
+          echo "        'generated_at': cbom.get('bomTimestamp', '')" >> send_to_es.py
+          echo "    }" >> send_to_es.py
+          echo "    res = requests.post(f'{url}/cbomkit-reports/_doc', json=doc, auth=auth)" >> send_to_es.py
+          echo "    print(res.status_code, res.text)" >> send_to_es.py
+          python3 send_to_es.py
