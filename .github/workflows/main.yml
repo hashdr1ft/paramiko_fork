@@ -1,9 +1,9 @@
 name: CBOMKit Scan and Push to Wazuh
 
 on:
-  workflow_dispatch:       # Manual trigger
+  workflow_dispatch:        # Manual trigger
   schedule:
-    - cron: '0 1 * * *'    # Daily at 1 AM UTC
+    - cron: '0 1 * * *'     # Daily at 1 AM UTC
 
 jobs:
   scan_and_push:
@@ -13,14 +13,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Pull and run CBOMKit
+      - name: Run CBOMKit
         run: |
-          docker pull ghcr.io/ibm/cbomkit:latest
           docker run --rm \
             -v "${{ github.workspace }}:/repo" \
             ghcr.io/ibm/cbomkit:latest /repo > cbom_raw.json
 
-      - name: Setup Python 3
+      - name: Setup Python 3.x
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
@@ -28,47 +27,42 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Push assets to Elasticsearch
+      - name: Push to Elasticsearch
         env:
           ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
           ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
           ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
-          REPO: ${{ github.repository }}
-
+          REPO:          ${{ github.repository }}
         run: |
-          python3 - <<PYCODE
+          python3 <<'PYCODE'
           import os, json, requests
           from datetime import datetime, timezone
 
           # Load CBOMKit output
-          with open("cbom_raw.json") as f:
+          with open('cbom_raw.json') as f:
               cbom = json.load(f)
 
-          assets = cbom.get("cryptographic_assets", [])
+          assets = cbom.get('cryptographic_assets', [])
           if not assets:
-              print("No cryptographic assets found.")
+              print('No cryptographic assets found.')
               exit(0)
 
-          # Prepare Elasticsearch client
-          url = os.environ["ELASTIC_URL"].rstrip('/')
-          auth = (os.environ["ELASTIC_USER"], os.environ["ELASTIC_PASS"])
-
-          # Use current UTC time as timestamp
-          timestamp = datetime.now(timezone.utc).isoformat()
+          # Prepare Elasticsearch params
+          url   = os.environ['ELASTIC_URL'].rstrip('/')
+          auth  = (os.environ['ELASTIC_USER'], os.environ['ELASTIC_PASS'])
+          ts    = datetime.now(timezone.utc).isoformat()
 
           # Index each asset
           for item in assets:
               doc = {
-                  "repo": os.environ["REPO"],
-                  "file": item.get("location"),
-                  "algorithm": item.get("algorithm"),
-                  "library": item.get("library"),
-                  "pq_safe": item.get("pq_safe", False),
-                  "risk_level": item.get("risk_level", "unknown"),
-                  "timestamp": timestamp
+                  'repo':       os.environ['REPO'],
+                  'file':       item.get('location'),
+                  'algorithm':  item.get('algorithm'),
+                  'library':    item.get('library'),
+                  'pq_safe':    item.get('pq_safe', False),
+                  'risk_level': item.get('risk_level', 'unknown'),
+                  'timestamp':  ts
               }
               resp = requests.post(f"{url}/cbomkit-reports/_doc", json=doc, auth=auth)
               print(resp.status_code, resp.text)
-              if not resp.ok:
-                  print("Failed to index document:", doc)
-PYCODE
+          PYCODE
