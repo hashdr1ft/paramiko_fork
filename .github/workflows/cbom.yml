@@ -12,20 +12,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up build (e.g., Java, Python)
-        # Example for Java:
+      - name: Set up Java
         uses: actions/setup-java@v3
         with:
           distribution: temurin
           java-version: 11
 
-      - name: Create CBOM
+      - name: Build with Maven
+        run: mvn clean install -DskipTests
+
+      - name: Generate CBOM
         uses: PQCA/cbomkit-action@v2.1.0
         id: cbom
 
-      - name: Save CBOM artifact
+      - name: Upload CBOM artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CBOM
-          path: ${{ steps.cbom.outputs.pattern }}
-          if-no-files-found: warn
+          name: cbom
+          path: cbom/
