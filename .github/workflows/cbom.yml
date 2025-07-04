@@ -3,10 +3,7 @@ name: CBOMKit Scan and Push to Wazuh
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 1 * * *'  # daily at 1 AM UTC
-
-permissions:
-  contents: read
+    - cron: '0 1 * * *'
 
 jobs:
   cbom_scan:
@@ -16,20 +13,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run CBOMKit and generate report
+      - name: Run CBOMKit and save output
         run: |
           docker run --rm -v ${{ github.workspace }}:/repo ghcr.io/ibm/cbomkit:latest /repo > cbom_raw.json
 
-      - name: Install Python requests
+      - name: Install dependencies
         run: pip install requests
 
-      - name: Push CBOM to Elasticsearch
-        env:
-          ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
-          ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
-          ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
+      - name: Create Python script to push to Elasticsearch
         run: |
-          python3 - <<EOF
+          cat << 'EOF' > push_cbom_to_es.py
 import json
 import requests
 import os
@@ -55,3 +48,10 @@ for asset in assets:
     res = requests.post(f"{url}/cbomkit-reports/_doc", json=doc, auth=auth)
     print(res.status_code, res.text)
 EOF
+
+      - name: Run script to push CBOM to ES
+        env:
+          ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
+          ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
+          ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
+        run: python3 push_cbom_to_es.py
