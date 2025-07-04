@@ -3,30 +3,36 @@ name: CBOMKit Scan & Push to Wazuh
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *"  # Daily at 3 AM UTC
+    - cron: "0 3 * * *"  # Run daily at 3 UTC
 
 jobs:
-  scan:
+  cbom_scan:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
 
-      - name: Run CBOMKit
-        uses: PQCA/cbomkit-action@main
-        with:
-          path: .  # scan current repo root
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate CBOM using PQCA Action
+        uses: PQCA/cbomkit-action@v2.1.0
         id: cbom
 
-      - name: Show CBOMKit Output
-        run: cat ${{ steps.cbom.outputs.output_file }}
+      - name: Upload CBOM JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cbom-report
+          path: ${{ steps.cbom.outputs.pattern }}
 
-      - name: Send CBOM Report to Wazuh Elasticsearch
+      - name: Send CBOM to Wazuh (Elasticsearch)
+        if: always()
         env:
           ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
           ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
           ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
-          CBOM_FILE: ${{ steps.cbom.outputs.output_file }}
+          CBOM_FILE: ${{ steps.cbom.outputs.pattern }}
         run: |
           pip install requests
           python3 <<EOF
@@ -43,11 +49,10 @@ for asset in cbom.get("cryptographic_assets", []):
         "library": asset.get("library"),
         "pq_safe": asset.get("pq_safe", False),
         "risk_level": asset.get("risk_level", "unknown"),
-        "timestamp": "${{ github.event.repository.updated_at }}"
+        "timestamp": "${{ github.run_started_at }}"
     }
-
     res = requests.post(
-        os.environ["ELASTIC_URL"] + "/cbomkit-reports/_doc",
+        f"{os.environ['ELASTIC_URL']}/cbomkit-reports/_doc",
         auth=(os.environ["ELASTIC_USER"], os.environ["ELASTIC_PASS"]),
         headers={"Content-Type": "application/json"},
         json=doc
