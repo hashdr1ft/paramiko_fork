@@ -1,125 +1,29 @@
-name: CBOMKit Scan and Push to Wazuh
-
 on:
   workflow_dispatch:
-
-permissions:
-  contents: write
-  pull-requests: write
 
 jobs:
   cbom-scan:
     runs-on: ubuntu-latest
-    name: Generate CBOM
-
+    name: CBOM generation
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Detect Java project
-        id: detect
-        run: |
-          echo "is_java=$( [ -f pom.xml ] && echo true || echo false )" >> $GITHUB_OUTPUT
-
-      # ─── Java path: build & PQCA action ───────────────────────────────
+      # When scanning Java code, the build should be completed beforehand
       - name: Build with Maven
-        if: steps.detect.outputs.is_java == 'true'
         run: mvn clean package -DskipTests=true
-
-      - name: Create CBOM (Java)
-        if: steps.detect.outputs.is_java == 'true'
-        uses: PQCA/cbomkit-action@v2.1.0
-        id: cbom_java
-
-      # ─── Non-Java path: use the CLI JAR from Maven Central ──────────
-      - name: Set up JDK 17 (for CLI)
-        if: steps.detect.outputs.is_java != 'true'
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Download CBOMKit-CLI JAR
-        if: steps.detect.outputs.is_java != 'true'
-        run: |
-          mkdir -p cbom
-          curl -sSL \
-            https://repo1.maven.org/maven2/org/pqca/cbomkit-cli/2.1.0/cbomkit-cli-2.1.0.jar \
-            -o cbomkit-cli.jar
-
-      - name: Run CBOMKit-CLI → JSON
-        if: steps.detect.outputs.is_java != 'true'
-        run: |
-          java -jar cbomkit-cli.jar /github/workspace --format json \
-            > cbom/cbom_raw.json
-        id: cbom_cli
-
-      # ─── Upload whichever JSON CBOMs were produced ────────────────────
-      - name: Upload CBOM artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cbom-json
-          path: |
-            ${{ steps.cbom_java.outputs.pattern }}
-            cbom/**/*.json
-          if-no-files-found: warn
-
-  push-cbom:
-    needs: cbom-scan
-    runs-on: ubuntu-latest
-    name: Push CBOM to Elasticsearch
-
-    permissions:
-      contents: read
-
-    steps:
-      - name: Download CBOM JSON files
-        uses: actions/download-artifact@v4
-        with:
-          name: cbom-json
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.12'
-
-      - name: Install Python dependencies
-        run: pip install requests
-
-      - name: Push to Elasticsearch
         env:
-          ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
-          ELASTIC_USER: ${{ secrets.ELASTIC_USER }}
-          ELASTIC_PASS: ${{ secrets.ELASTIC_PASS }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          python3 - << 'EOF'
-          import glob, json, os, requests
-
-          files = glob.glob("*.json")
-          if not files:
-              print("No CBOM JSON found. Exiting.")
-              exit(1)
-
-          url = os.environ['ELASTIC_URL']
-          auth = (os.environ['ELASTIC_USER'], os.environ['ELASTIC_PASS'])
-          repo = os.environ['GITHUB_REPOSITORY']
-
-          for fname in files:
-              with open(fname) as f:
-                  cbom = json.load(f)
-              for asset in cbom.get('cryptographic_assets', []):
-                  doc = {
-                      'repo': repo,
-                      'file': asset.get('location'),
-                      'algorithm': asset.get('algorithm'),
-                      'library': asset.get('library'),
-                      'pq_safe': asset.get('pq_safe', False),
-                      'risk_level': asset.get('risk_level', 'unknown'),
-                      'scanner': cbom.get('scanner', ''),
-                      'generated_at': cbom.get('bomTimestamp', '')
-                  }
-                  res = requests.post(f'{url}/cbomkit-reports/_doc',
-                                      json=doc, auth=auth)
-                  print(fname, res.status_code, res.text)
-          EOF
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create CBOM
+        uses: PQCA/cbomkit-action@v2.0.0
+        id: cbom
+      # Allow you to persist CBOM after a job has completed, and share 
+      # that CBOM with another job in the same workflow.
+      - name: Commit changes to new branch
+        uses: actions/upload-artifact@v4
+        with: 
+          name: "CBOM"
+          path: ${{ steps.cbom.outputs.pattern }}
+          if-no-files-found: warn 
